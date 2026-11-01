@@ -1,4 +1,6 @@
+use crate::bootstrap::Credential;
 use crate::broker::{self, BrokerHandle, Bundle, ExecEvent, ExecHandle, ModelChoice};
+use crate::consent::PaidConsent;
 use crate::history::Sample;
 use crate::theme;
 use crate::ui::{self, Tone};
@@ -214,12 +216,13 @@ pub struct Desktop {
     pub active_turn: Option<String>,
     pub usage_note: Option<String>,
     pub playground_error: Option<String>,
+    pub paid_consent: PaidConsent,
     pub revoke_confirm: Option<String>,
     pub toast: Option<(String, Instant)>,
     pub mini_view: bool,
     pub broker: BrokerHandle,
     pub executor: ExecHandle,
-    pub token_path: PathBuf,
+    pub credential: Credential,
     pub poll_task: Option<Task<()>>,
     focus: FocusHandle,
     initial_focus: bool,
@@ -240,7 +243,7 @@ impl Desktop {
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        token_path: PathBuf,
+        credential: Credential,
         refresh_seconds: u64,
         example: bool,
     ) -> Self {
@@ -252,11 +255,11 @@ impl Desktop {
         };
         theme::install(cx, dark);
         let broker = broker::spawn(
-            token_path.clone(),
+            credential.clone(),
             Duration::from_secs(refresh_seconds),
             example,
         );
-        let executor = broker::spawn_executor(token_path.clone(), example);
+        let executor = broker::spawn_executor(credential.clone(), example);
         let palette_input = cx
             .new(|cx| InputState::new(window, cx).placeholder("Jump to a page, model or action…"));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search models…"));
@@ -371,12 +374,13 @@ impl Desktop {
             active_turn: None,
             usage_note: None,
             playground_error: None,
+            paid_consent: PaidConsent::default(),
             revoke_confirm: None,
             toast: None,
             mini_view: example && std::env::var_os("LAI_DESKTOP_MINI_VIEW").is_some(),
             broker,
             executor,
-            token_path,
+            credential,
             poll_task: None,
             focus,
             initial_focus: true,
@@ -516,6 +520,13 @@ impl Desktop {
                         }
                         ExecEvent::Failed { error } => {
                             self.running = false;
+                            let error = if error.contains("BILLING_CONSENT_REQUIRED") {
+                                format!(
+                                    "{error} Turn on \"Allow paid or unknown-billing routes\" and run again."
+                                )
+                            } else {
+                                error
+                            };
                             self.playground_error = Some(error.clone());
                             if let Some(session) = self
                                 .active_session
@@ -535,9 +546,13 @@ impl Desktop {
         if changed {
             cx.notify();
         }
-        // One bounded metadata probe per authenticated connection that has no
-        // quota pool in the cached snapshot. This restores usage after a broker
-        // restart without polling or starting any inference.
+        // One bounded metadata probe per connection that still needs evidence.
+        // The private runtime starts from a passive scan, where every auth state
+        // is "not checked"; probing once turns that into verified, cached or
+        // sign-in-required. A shared broker is only asked for authenticated
+        // connections that are missing a quota pool. Neither path starts
+        // inference or repeats a failed probe within this session.
+        let local = self.credential.is_local();
         let mut missing = Vec::new();
         if let Some(bundle) = &self.bundle {
             for connection in &bundle.snapshot.connections {
@@ -553,7 +568,8 @@ impl Desktop {
                     .quota_pools
                     .iter()
                     .any(|pool| pool.connection_ids.contains(&connection.id));
-                if verified && !pooled && self.startup_probes.insert(connection.id.clone()) {
+                let needed = (local && !verified) || (verified && !pooled);
+                if needed && self.startup_probes.insert(connection.id.clone()) {
                     missing.push(connection.id.clone());
                 }
             }
@@ -826,10 +842,16 @@ impl Desktop {
             role: TranscriptRole::You,
             text: prompt.clone(),
         });
-        let _ = self
-            .executor
-            .commands
-            .send(broker::ExecCommand::Run { prompt, choice });
+        // Consent covers this submitted run only; dispatching clears the switch.
+        let allow_paid = self
+            .selected_model
+            .as_deref()
+            .is_some_and(|model| self.paid_consent.take_for_run(model));
+        let _ = self.executor.commands.send(broker::ExecCommand::Run {
+            prompt,
+            choice,
+            allow_paid,
+        });
         cx.notify();
     }
 
@@ -1507,8 +1529,9 @@ impl Desktop {
                                 .text_size(px(10.))
                                 .text_color(theme.muted_foreground)
                                 .child(format!(
-                                    "Retrying with {}. Start the shared broker or pass --token-file.",
-                                    self.token_path.display()
+                                    "Retrying with {}. {}",
+                                    self.credential.label(),
+                                    self.credential.recovery_hint()
                                 )),
                         ),
                 )
