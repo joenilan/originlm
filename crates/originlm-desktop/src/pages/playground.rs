@@ -5,6 +5,7 @@ use gpui_kit::component::{
     ActiveTheme, IconName,
     button::{Button, ButtonVariants},
     input::Textarea,
+    switch::Switch,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -17,8 +18,12 @@ impl Desktop {
         let transcript = self.transcript.clone();
         let transcript_empty = transcript.is_empty();
         let running = self.running;
+        let paid_consent = self
+            .paid_consent
+            .is_armed_for(self.selected_model.as_deref());
         let error = self.playground_error.clone();
         let usage = self.usage_note.clone();
+        let entity_paid = cx.entity();
 
         let picker = div()
             .v_flex()
@@ -140,7 +145,11 @@ impl Desktop {
                         .child(ui::chip(choice.provider.clone(), Tone::Blue, &theme))
                         .child(ui::chip(choice.billing.clone(), Tone::Amber, &theme))
                         .child(ui::chip("read-only", Tone::Neutral, &theme))
-                        .child(ui::chip("paid off", Tone::Green, &theme)),
+                        .child(if paid_consent {
+                            ui::chip("paid allowed", Tone::Amber, &theme)
+                        } else {
+                            ui::chip("paid off", Tone::Green, &theme)
+                        }),
                 )
                 .into_any_element(),
             None => div()
@@ -161,6 +170,39 @@ impl Desktop {
             .child(ui::section_title("Prompt", &theme))
             .child(Textarea::new(&self.prompt).h(px(92.)))
             .child(selection_summary)
+            .child(
+                div()
+                    .h_flex()
+                    .gap_3()
+                    .child(
+                        Switch::new("paid-consent")
+                            .checked(paid_consent)
+                            .on_change(move |checked, _, cx| {
+                                let checked = *checked;
+                                entity_paid.update(cx, |this, cx| {
+                                    let model = this.selected_model.clone();
+                                    this.paid_consent.set(model.as_deref(), checked);
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .child("Allow paid or unknown-billing routes"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme.muted_foreground)
+                                    .child("Applies to the next run of this model only, then turns off."),
+                            ),
+                    ),
+            )
             .child(
                 div()
                     .h_flex()

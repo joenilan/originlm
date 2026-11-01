@@ -57,7 +57,7 @@ export function RailVariant({ candidates }: VariantProps) {
             key={group.id}
             variant="ghost"
             data-provider={group.id}
-            aria-label={group.name}
+            aria-label={`${group.name} ${group.count}`}
             aria-pressed={provider === group.id}
             onClick={() => actions.patch({ provider: group.id })}
             className={cn(
@@ -76,7 +76,7 @@ export function RailVariant({ candidates }: VariantProps) {
             ) : (
               <ProviderGlyph id={group.id} name={group.name} size="sm" />
             )}
-            <span className="hidden min-w-0 flex-1 truncate sm:block">{group.name}</span>
+            <span className="hidden min-w-0 flex-1 truncate sm:block">{group.name}</span>{' '}
             <span className="ml-auto hidden font-mono text-[0.65rem] tabular-nums text-muted-foreground sm:block">{group.count}</span>
           </Button>
         ))}
